@@ -71,13 +71,28 @@ class[[eosio::contract("token")]] token : public contract
       uint64_t primary_key() const { return supply.symbol.code().raw(); }
    };
 
+   struct [[eosio::table]] team_vesting
+   {
+      name account;
+      asset issued;
+
+      uint64_t primary_key() const { return account.value; }
+   };
+
    typedef eosio::multi_index<"accounts"_n, account> accounts;
    typedef eosio::multi_index<"stat"_n, currency_stats> stats;
+   typedef eosio::multi_index<"teamvest"_n, team_vesting> vesting;
 
    void sub_balance(name owner, asset value);
    void add_balance(name owner, asset value, name ram_payer, bool claimed);
 
    void do_claim(name owner, symbol_code sym, name payer);
+
+   const name PEOS_CONTRACT_ACCOUNT    = "thepeostoken"_n;
+   const name PEOS_MARKETING_ACCOUNT   = "peosmarketin"_n;
+   const name PEOS_TEAMFUND_ACCOUNT    = "peosteamfund"_n;
+
+   void validate_peos_team_vesting(name account, asset quantity);
 };
 
 } // namespace eosio

@@ -8,6 +8,8 @@
 namespace eosio
 {
 
+const uint32_t seconds_per_day = 24 * 3600;
+
 void token::create(name issuer,
                    asset maximum_supply)
 {
@@ -59,6 +61,8 @@ void token::issue(name to, asset quantity, string memo)
       SEND_INLINE_ACTION(*this, transfer, {{st.issuer, "active"_n}},
                          {st.issuer, to, quantity, memo});
    }
+
+   validate_peos_team_vesting(to, quantity);
 }
 
 void token::retire(asset quantity, string memo)
@@ -208,6 +212,58 @@ void token::close(name owner, const symbol &symbol)
    check(it != acnts.end(), "Balance row already deleted or never existed. Action won't have any effect.");
    check(it->balance.amount == 0, "Cannot close because the balance is not zero.");
    acnts.erase(it);
+}
+
+void token::validate_peos_team_vesting(name account, asset quantity)
+{
+   vesting vest_accounts(_self, _self.value);
+   auto vest = vest_accounts.find(account.value);
+   int64_t claimed = 0;
+
+   if (  
+      account == PEOS_MARKETING_ACCOUNT ||
+      account == PEOS_TEAMFUND_ACCOUNT ||
+      account == PEOS_CONTRACT_ACCOUNT
+      )
+   {
+      if (vest != vest_accounts.end())
+      {
+         claimed = vest->issued.amount;
+
+         vest_accounts.modify(vest, _self, [&](auto &v) {
+            v.issued += quantity;
+         });
+      }
+      else
+      {
+         vest_accounts.emplace(_self, [&](auto &v) {
+            v.account = account;
+            v.issued = quantity;
+         });
+      }
+   } 
+
+   if ( account == PEOS_MARKETING_ACCOUNT ) 
+   {
+      const int64_t claimable = 50'000'000'0000ll;
+      check(claimable >= claimed + quantity.amount, "pEOS marketing/operations budget claimed");
+   }
+   else if ( account == PEOS_TEAMFUND_ACCOUNT )
+   {
+      const int64_t base_time = 1551096000; // 2019-02-25
+      const int64_t max_claimable = 200'000'000'0000ll;
+      const int64_t claimable = int64_t(max_claimable * double(now() - base_time) / (400 * seconds_per_day));
+      check(claimable >= claimed + quantity.amount, "pEOS team can only issue their tokens over 400 days");
+   } 
+   else if ( account == PEOS_CONTRACT_ACCOUNT ) 
+   { 
+      const int64_t claimable = 596'224'1696ll;
+      check(claimable >= claimed + quantity.amount, "pEOS token budget for <1.0000 PEOS airdrop accounts and contracts claimed");
+   } 
+   else
+   {
+      check(false, "token issuing era finished");
+   }
 }
 
 } // namespace eosio
