@@ -8,4 +8,4 @@ For more information visit https://peos.one
 ## /contract/
 
 The source code of the contract that handles the PEOS token. 
-Builds with eosio.cdt v1.5.0.
+Build with eosio.cdt v1.5.0 for checksum verification.
