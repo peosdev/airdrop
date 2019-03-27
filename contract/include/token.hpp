@@ -38,6 +38,7 @@ class[[eosio::contract("token")]] token : public contract
 
    [[eosio::action]] void claim(name owner, symbol_code sym);
    [[eosio::action]] void recover(name owner, symbol_code sym);
+   [[eosio::action]] void open(name owner, const symbol &symbol, name ram_payer);
    [[eosio::action]] void close(name owner, const symbol &symbol);
 
    static asset get_supply(name token_contract_account, symbol_code sym_code)
