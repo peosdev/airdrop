@@ -27,6 +27,9 @@ class[[eosio::contract("token")]] token : public contract
    [[eosio::action]] void create(name issuer,
                                  asset maximum_supply);
 
+   [[eosio::action]] void update(name issuer,
+                   asset maximum_supply);
+
    [[eosio::action]] void issue(name to, asset quantity, string memo);
 
    [[eosio::action]] void retire(asset quantity, string memo);

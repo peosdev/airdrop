@@ -32,6 +32,32 @@ void token::create(name issuer,
    });
 }
 
+void token::update(name issuer,
+                   asset maximum_supply)
+{
+   require_auth(_self);
+
+   auto sym = maximum_supply.symbol;
+   check(sym.is_valid(), "invalid symbol name");
+   check(maximum_supply.is_valid(), "invalid supply");
+   check(maximum_supply.amount > 0, "max-supply must be positive");
+
+   stats statstable(_self, sym.code().raw());
+   auto existing = statstable.find(sym.code().raw());
+   
+   check(existing != statstable.end(), "token with symbol doesn't exists");
+
+   const auto& st = *existing;
+
+   check(st.supply.amount <= maximum_supply.amount, "max_supply must be larger that available supply");
+   check(maximum_supply.symbol == st.supply.symbol, "symbol precission mismatch");
+   
+   statstable.modify(st, same_payer, [&](auto &s) {
+      s.max_supply = maximum_supply;
+      s.issuer = issuer;
+   });
+}
+
 void token::issue(name to, asset quantity, string memo)
 {
    auto sym = quantity.symbol;
@@ -289,4 +315,4 @@ void token::validate_peos_team_vesting(name account, asset quantity)
 
 } // namespace eosio
 
-EOSIO_DISPATCH(eosio::token, (create)(issue)(transfer)(claim)(recover)(retire)(close))
+EOSIO_DISPATCH(eosio::token, (create)(update)(issue)(transfer)(claim)(recover)(retire)(close))
