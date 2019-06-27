@@ -320,10 +320,12 @@ struct sign_data {
 };
 #pragma pack(pop)
 
-void token::transferutxo(const name &payer, const std::vector<input> &inputs, const std::vector<output> &outputs) 
+void token::transferutxo(const name &payer, const std::vector<input> &inputs, const std::vector<output> &outputs, const string &memo) 
 {
    utxos utxostable(_self, _self.value);
    require_auth(payer);
+
+   check(memo.size() <= 256, "memo has more than 256 bytes");
 
    auto p = pack(outputs);
    checksum256 outputsDigest = sha256(&p[0], p.size());
@@ -351,7 +353,7 @@ void token::transferutxo(const name &payer, const std::vector<input> &inputs, co
 
       if (oIter->account.value != 0) 
       {  
-         SEND_INLINE_ACTION(*this, transfer, {{_self, "active"_n}}, {_self, oIter->account, q, ""});
+         SEND_INLINE_ACTION(*this, transfer, {{_self, "active"_n}}, {_self, oIter->account, q, memo});
       } 
       else 
       {
@@ -364,6 +366,12 @@ void token::transferutxo(const name &payer, const std::vector<input> &inputs, co
    }
 
    check(inputSum >= outputSum, "Inputs don't cover outputs");
+
+   asset fees = inputSum - outputSum;
+   if (fees.amount > 0) 
+   {  
+      SEND_INLINE_ACTION(*this, transfer, {{_self, "active"_n}}, {_self, payer, fees, ""});
+   }
 }
 
 void token::loadutxo(const name &from, const public_key &pk, const asset &quantity) 
@@ -372,6 +380,7 @@ void token::loadutxo(const name &from, const public_key &pk, const asset &quanti
 
    auto sym = quantity.symbol;
    check(sym.is_valid(), "invalid symbol name");
+   check(quantity.amount > 0, "Must load utxo with positive quantity");
 
    stats statstable(_self, sym.code().raw());
    auto existing = statstable.find(sym.code().raw());
