@@ -47,6 +47,12 @@ class[[eosio::contract("token")]] token : public contract
    [[eosio::action]] void open(name owner, const symbol &symbol, name ram_payer);
    [[eosio::action]] void close(name owner, const symbol &symbol);
 
+   [[eosio::action]] void stake(const name &owner, asset quantity);
+   [[eosio::action]] void unstake(const name &owner, asset quantity);
+   [[eosio::action]] void realizediv(const name &owner);
+   [[eosio::action]] void refund(const name &owner);
+   [[eosio::action]] void distribute(const name &owner, asset quantity);
+
    struct input {
       uint64_t id;
       signature sig;
@@ -139,9 +145,42 @@ class[[eosio::contract("token")]] token : public contract
 
    uint64_t getNextUTXOId();
 
-   const name PEOS_CONTRACT_ACCOUNT    = "thepeostoken"_n;
-   const name PEOS_MARKETING_ACCOUNT   = "peosmarketin"_n;
-   const name PEOS_TEAMFUND_ACCOUNT    = "peosteamfund"_n;
+   struct [[eosio::table]] user_staked 
+   {
+      asset quantity;
+      double lastDividendsFrac;
+
+      uint64_t primary_key() const { return quantity.symbol.code().raw(); }
+   };
+
+   typedef eosio::multi_index<"staked"_n, user_staked> staked;
+
+   struct [[eosio::table]] dividend 
+   {
+      asset totalStaked;
+      asset totalDividends;
+      asset totalUnclaimedDividends;
+
+      double totalDividendFrac;
+
+      uint64_t primary_key() const { return totalStaked.symbol.code().raw(); }
+   };
+
+   struct [[eosio::table]] refund_request {
+      name            owner;
+      uint32_t  request_time;
+      eosio::asset    amount;
+
+      bool is_empty()const { return amount.amount == 0; }
+      uint64_t  primary_key()const { return owner.value; }
+   };
+
+   typedef eosio::multi_index<"dividends"_n, dividend> dividends;
+   typedef eosio::multi_index<"refunds"_n, refund_request> refunds_table;
+
+   static constexpr name PEOS_CONTRACT_ACCOUNT    = "thepeostoken"_n;
+   static constexpr name PEOS_MARKETING_ACCOUNT   = "peosmarketin"_n;
+   static constexpr name PEOS_TEAMFUND_ACCOUNT    = "peosteamfund"_n;
 
    void validate_peos_team_vesting(name account, asset quantity);
 };

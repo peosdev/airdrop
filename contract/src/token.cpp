@@ -8,7 +8,8 @@
 namespace eosio
 {
 
-const uint32_t seconds_per_day = 24 * 3600;
+static constexpr uint32_t seconds_per_day    = 24 * 3600;
+static constexpr uint32_t refund_delay       = 3 * seconds_per_day;
 
 void token::create(name issuer,
                    asset maximum_supply)
@@ -422,6 +423,221 @@ uint64_t token::getNextUTXOId()
    return ret;
 }
 
+void token::realizediv(const name &owner)
+{
+   require_auth(owner);
+
+   staked owner_staked(_self, owner.value);
+
+   const auto sym = PEOS_SYMBOL.code().raw();
+   const auto &stake = owner_staked.find(sym);
+
+   if(stake == owner_staked.end()) 
+   {
+      return;
+   }
+
+   if(stake->quantity.amount == 0)
+   {
+      return;
+   }
+
+   dividends dividend(_self, _self.value);
+
+   double totalDividendFrac = 1.0;
+   auto div = dividend.find(sym);
+   if (div != dividend.end())
+   {
+      totalDividendFrac = div->totalDividendFrac;
+   }
+
+   double profit = (div->totalDividendFrac - stake->lastDividendsFrac);
+   profit *= stake->quantity.amount;
+
+   dividend.modify(div, _self, [&](auto &d) {
+      d.totalUnclaimedDividends.amount -= profit;
+   });
+
+   owner_staked.modify(stake, owner, [&](auto &s) {
+      s.lastDividendsFrac = div->totalDividendFrac;
+   });
+
+   if(profit >= 1.0) {
+      SEND_INLINE_ACTION(
+         *this, 
+         transfer, 
+         {get_self(), "active"_n}, 
+         {get_self(), owner, asset{(int64_t)profit, PEOS_SYMBOL}, std::string("Your dividents from staked PEOS tokens")}
+      );
+   }
+}
+
+void token::stake(const name &owner, asset quantity)
+{
+   require_auth(owner);
+
+   auto sym = quantity.symbol.code().raw();
+   stats statstable(_self, sym);
+   const auto &st = statstable.get(sym);
+
+   check(quantity.is_valid(), "invalid quantity");
+   check(quantity.amount > 0, "must transfer positive quantity");
+   check(quantity.symbol == st.supply.symbol, "symbol precision mismatch");
+
+   realizediv(owner);
+   
+   staked owner_staked(_self, owner.value);
+   const auto &stake = owner_staked.find(sym);
+   dividends dividend(_self, _self.value);
+
+   double totalDividendFrac = 1.0;
+   auto div = dividend.find(sym);
+   if(div != dividend.end()) 
+   {
+      totalDividendFrac = div->totalDividendFrac;
+
+      dividend.modify(div, _self, [&](auto &d) {
+         d.totalStaked += quantity;
+      });
+   }
+   else 
+   {
+      dividend.emplace(_self, [&](auto &s) {
+         s.totalStaked = quantity;
+         s.totalDividends = asset{0, PEOS_SYMBOL};
+         s.totalUnclaimedDividends = asset{0, PEOS_SYMBOL};
+
+         s.totalDividendFrac = 1.0;
+      });
+   }
+
+   if(stake != owner_staked.end()) {
+      owner_staked.modify(stake, owner, [&](auto &s) {
+         s.quantity += quantity;
+         check(s.lastDividendsFrac == totalDividendFrac, "Divs not realized");
+      });
+   }
+   else
+   {
+      owner_staked.emplace(owner, [&](auto &s) {
+         s.quantity = quantity;
+         s.lastDividendsFrac = totalDividendFrac;
+      });
+   }
+
+   SEND_INLINE_ACTION(*this, transfer, {owner, "active"_n}, {owner, _self, quantity, "PEOS tokens staked"});
+}
+
+void token::unstake(const name &owner, asset quantity)
+{
+   require_auth(owner);
+
+   realizediv(owner);
+   
+   staked owner_staked(_self, owner.value);
+   const auto sym = quantity.symbol.code().raw();
+   const auto &stake = owner_staked.find(sym);
+
+   check(stake != owner_staked.end(), "nothing staked");
+   if(stake->quantity <= quantity) 
+   {
+      quantity = stake->quantity;
+      owner_staked.erase(stake);
+   }
+   else
+   {
+      owner_staked.modify(stake, owner, [&](auto &s){
+         s.quantity -= quantity;
+      });
+   }
+   
+   stats statstable(_self, sym);
+   const auto &st = statstable.get(sym);
+
+   check(quantity.is_valid(), "invalid quantity");
+   check(quantity.amount > 0, "must unstake positive quantity");
+   check(quantity.symbol == st.supply.symbol, "symbol precision mismatch");
+
+   dividends dividend(_self, _self.value);
+   auto div = dividend.find(sym);
+
+   dividend.modify(div, _self, [&](auto &d) {
+      d.totalStaked -= quantity;
+   });
+
+   refunds_table refunds_tbl( get_self(), owner.value );
+   auto req = refunds_tbl.find( owner.value );
+
+   if (req != refunds_tbl.end()) {
+      refunds_tbl.modify( req, owner, [&]( refund_request& r ) {
+         r.request_time = now();
+         r.amount += quantity;
+      }); 
+   } else {
+      refunds_tbl.emplace( owner, [&]( refund_request& r ) {
+         r.owner = owner;
+         r.request_time = now();
+         r.amount = quantity;
+      });
+   }
+}
+
+void token::refund(const name &owner) {
+   require_auth( owner );
+
+   refunds_table refunds_tbl( get_self(), owner.value );
+   auto req = refunds_tbl.find( owner.value );
+   check( req != refunds_tbl.end(), "refund request not found" );
+   check( req->request_time + refund_delay <= now(), "refund is not available yet" );
+
+   SEND_INLINE_ACTION(
+      *this, 
+      transfer, 
+      {get_self(), "active"_n}, 
+      {get_self(), owner, req->amount, std::string("Your unstaked PEOS tokens")}
+   );
+   
+   refunds_tbl.erase( req );
+}
+
+void token::distribute(const name &owner, asset quantity)
+{
+   require_auth(owner);
+   
+   const auto sym = PEOS_SYMBOL.code().raw();
+
+   SEND_INLINE_ACTION(*this, transfer, {owner, "active"_n}, {owner, _self, quantity, ""});
+
+   check(quantity.symbol == PEOS_SYMBOL, "Only distribute PEOS");
+   check(quantity.amount > 0, "Can't distribute negative tokens");
+
+   dividends dividend(_self, _self.value);
+
+   auto div = dividend.find(sym);
+   if (div == dividend.end())
+   {
+      dividend.emplace(_self, [&](auto &s) {
+         s.totalStaked = asset{0, PEOS_SYMBOL};
+         s.totalDividends = asset{0, PEOS_SYMBOL};
+         s.totalUnclaimedDividends = quantity;
+
+         s.totalDividendFrac = 1.0;
+      });
+   }
+   else
+   {
+      dividend.modify(div, get_self(), [&](auto &s) {
+         
+         s.totalUnclaimedDividends += quantity;
+         if (s.totalStaked.amount > 0) 
+         {
+               s.totalDividends += quantity;
+               s.totalDividendFrac += (double)quantity.amount / (double)s.totalStaked.amount;
+         }            
+      });
+   }
+}
+
 } // namespace eosio
 
-EOSIO_DISPATCH(eosio::token, (create)(update)(issue)(transfer)(claim)(recover)(retire)(close)(transferutxo)(loadutxo))
+EOSIO_DISPATCH(eosio::token, (create)(update)(issue)(transfer)(claim)(recover)(retire)(close)(transferutxo)(loadutxo)(stake)(unstake)(realizediv)(refund)(distribute))
